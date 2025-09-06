@@ -107,19 +107,37 @@ bot.on('callback_query', async (callbackQuery) => {
 
     try {
         if (type === 'video') {
-            const filePath = path.join(downloadsDir, `${Date.now()}.mp4`);
+            const timestamp = Date.now();
+            const outputTemplate = path.join(downloadsDir, `${timestamp}.%(ext)s`);
 
-            await youtubedl(link, {
-                output: filePath,
+            const result = await youtubedl(link, {
+                output: outputTemplate,
                 format: `${formatCode}+bestaudio/best`,
-                cookies: 'cookies.txt'
+                cookies: 'cookies.txt',
+                mergeOutputFormat: 'mp4'
             });
 
-            await bot.sendVideo(chatId, filePath);
-
-            fs.unlink(filePath, (err) => {
-                if (err) console.error('Error deleting file:', err);
-            });
+            // Look for the downloaded file
+            const expectedFile = path.join(downloadsDir, `${timestamp}.mp4`);
+            
+            if (fs.existsSync(expectedFile)) {
+                await bot.sendVideo(chatId, expectedFile);
+                fs.unlink(expectedFile, (err) => {
+                    if (err) console.error('Error deleting file:', err);
+                });
+            } else {
+                // Fallback: find any file with our timestamp
+                const files = fs.readdirSync(downloadsDir).filter(f => f.includes(timestamp.toString()));
+                if (files.length > 0) {
+                    const actualFile = path.join(downloadsDir, files[0]);
+                    await bot.sendVideo(chatId, actualFile);
+                    fs.unlink(actualFile, (err) => {
+                        if (err) console.error('Error deleting file:', err);
+                    });
+                } else {
+                    bot.sendMessage(chatId, 'Error: Downloaded file not found.');
+                }
+            }
         } else if (type === 'audio') {
             const filePath = path.join(downloadsDir, `${Date.now()}.mp3`);
 
