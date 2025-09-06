@@ -125,7 +125,8 @@ bot.on('callback_query', async (callbackQuery) => {
                 extractAudio: true,
                 audioFormat: 'mp3',
                 output: filePath,
-                format: formatCode
+                format: formatCode,
+                cookies: 'cookies.txt'
             });
 
             await bot.sendAudio(chatId, filePath);
