@@ -52,7 +52,7 @@ bot.on('message', async (msg) => {
                         const resolution = parts[2];
                         const note = parts.slice(5).join(' ');
                         videoFormats.push({
-                            text: `🎥 ${resolution} ${note}`,
+                            text: `🎥 ${resolution} (with audio)`,
                             callback_data: JSON.stringify({ type: 'video', formatCode, videoId })
                         });
                     }
@@ -111,7 +111,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
             await youtubedl(link, {
                 output: filePath,
-                format: formatCode,
+                format: `${formatCode}+bestaudio/best`,
                 cookies: 'cookies.txt'
             });
 
