@@ -4,6 +4,44 @@ const ytdl = require('@distube/ytdl-core');
 const fs = require('fs');
 const path = require('path');
 
+// User agents to rotate through
+const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
+];
+
+// Create agent with random user agent
+function getRandomAgent() {
+    return {
+        headers: {
+            'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Accept-Encoding': 'gzip,deflate',
+            'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
+            'Keep-Alive': '300',
+            'Connection': 'keep-alive',
+        }
+    };
+}
+
+// Retry function with exponential backoff
+async function retryWithBackoff(fn, maxRetries = 3) {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            await new Promise(resolve => setTimeout(resolve, i * 1000 + Math.random() * 1000)); // Random delay
+            return await fn();
+        } catch (error) {
+            console.log(`Attempt ${i + 1} failed:`, error.message);
+            if (i === maxRetries - 1) {
+                throw error;
+            }
+        }
+    }
+}
+
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
@@ -33,7 +71,12 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, 'Processing your request... Please wait.');
 
         try {
-            const info = await ytdl.getInfo(messageText);
+            const info = await retryWithBackoff(async () => {
+                const agent = getRandomAgent();
+                return await ytdl.getInfo(messageText, { 
+                    requestOptions: agent
+                });
+            });
             const formats = info.formats;
 
             // Filter video formats with audio
@@ -108,7 +151,11 @@ bot.on('callback_query', async (callbackQuery) => {
             const timestamp = Date.now();
             const filePath = path.join(downloadsDir, `${timestamp}.mp4`);
 
-            const stream = ytdl(url, { format: itag });
+            const agent = getRandomAgent();
+            const stream = ytdl(url, { 
+                format: itag,
+                requestOptions: agent
+            });
             const writeStream = fs.createWriteStream(filePath);
             
             stream.pipe(writeStream);
@@ -135,7 +182,11 @@ bot.on('callback_query', async (callbackQuery) => {
             const timestamp = Date.now();
             const filePath = path.join(downloadsDir, `${timestamp}.mp3`);
 
-            const stream = ytdl(url, { filter: 'audioonly', format: 'mp3' });
+            const agent = getRandomAgent();
+            const stream = ytdl(url, { 
+                filter: 'audioonly',
+                requestOptions: agent
+            });
             const writeStream = fs.createWriteStream(filePath);
             
             stream.pipe(writeStream);
