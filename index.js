@@ -37,6 +37,7 @@ bot.on('message', async (msg) => {
         try {
             const output = await youtubedl(messageText, {
                 listFormats: true,
+                cookies: 'cookies.txt'
             });
 
             const formats = output.split('\n');
@@ -110,7 +111,8 @@ bot.on('callback_query', async (callbackQuery) => {
 
             await youtubedl(link, {
                 output: filePath,
-                format: formatCode
+                format: formatCode,
+                cookies: 'cookies.txt'
             });
 
             await bot.sendVideo(chatId, filePath);
