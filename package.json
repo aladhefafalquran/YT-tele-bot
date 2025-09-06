@@ -15,9 +15,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@distube/ytdl-core": "^4.14.4",
     "dotenv": "^17.2.1",
-    "express": "^5.1.0",
-    "node-telegram-bot-api": "^0.66.0",
-    "youtube-dl-exec": "^3.0.3"
+    "node-telegram-bot-api": "^0.66.0"
   }
 }

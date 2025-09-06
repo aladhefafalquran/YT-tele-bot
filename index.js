@@ -1,11 +1,10 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const youtubedl = require('youtube-dl-exec');
+const ytdl = require('@distube/ytdl-core');
 const fs = require('fs');
 const path = require('path');
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-
 const bot = new TelegramBot(token, { polling: true });
 
 function getYoutubeVideoId(url) {
@@ -21,9 +20,8 @@ if (!fs.existsSync(downloadsDir)) {
 }
 
 bot.onText(/\/start/, (msg) => {
-
     const chatId = msg.chat.id;
-    bot.sendMessage(chatId, 'Hello! I am a YouTube video downloader bot. Send me a YouTube link and I will download the video for you.');
+    bot.sendMessage(chatId, 'Hello! I am a YouTube video downloader bot. Send me a YouTube link and I will show you available formats.');
 });
 
 bot.on('message', async (msg) => {
@@ -35,177 +33,129 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, 'Processing your request... Please wait.');
 
         try {
-            let output;
-            const strategies = [
-                { cookies: 'cookies.txt' },
-                { cookiesFromBrowser: 'chrome' },
-                { cookiesFromBrowser: 'firefox' },
-                {} // No authentication
-            ];
+            const info = await ytdl.getInfo(messageText);
+            const formats = info.formats;
 
-            for (let i = 0; i < strategies.length; i++) {
-                try {
-                    output = await youtubedl(messageText, {
-                        listFormats: true,
-                        ...strategies[i]
-                    });
-                    break; // Success, exit loop
-                } catch (err) {
-                    console.log(`Strategy ${i + 1} failed:`, err.message);
-                    if (i === strategies.length - 1) {
-                        throw err; // All strategies failed
-                    }
-                }
-            }
+            // Filter video formats with audio
+            const videoFormats = formats
+                .filter(format => format.hasVideo && format.hasAudio && format.container === 'mp4')
+                .sort((a, b) => (b.height || 0) - (a.height || 0))
+                .slice(0, 8); // Limit to top 8 formats
 
-            const formats = output.split('\n');
-            const videoFormats = [];
-            let bestAudioFormat = null;
-
-            formats.forEach(line => {
-                if (line.includes('mp4')) {
-                    const parts = line.split(/\s+/);
-                    const formatCode = parts[0];
-                    if (formatCode && !isNaN(formatCode)) {
-                        const resolution = parts[2];
-                        const note = parts.slice(5).join(' ');
-                        videoFormats.push({
-                            text: `🎥 ${resolution} (with audio)`,
-                            callback_data: JSON.stringify({ type: 'video', formatCode, videoId })
-                        });
-                    }
-                }
-                if (line.includes('audio only')) {
-                    const parts = line.split(/\s+/);
-                    const formatCode = parts[0];
-                    if (formatCode && !isNaN(formatCode)) {
-                        bestAudioFormat = formatCode;
-                    }
-                }
-            });
+            // Filter audio-only formats
+            const audioFormats = formats
+                .filter(format => format.hasAudio && !format.hasVideo)
+                .sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))
+                .slice(0, 1); // Best audio only
 
             const keyboard = [];
-            // chunk video formats into pairs
-            for (let i = 0; i < videoFormats.length; i += 2) {
-                keyboard.push(videoFormats.slice(i, i + 2));
-            }
 
-            if (bestAudioFormat) {
+            // Add video options
+            videoFormats.forEach(format => {
+                const quality = format.qualityLabel || format.quality || 'Unknown';
                 keyboard.push([{
-                    text: '🎵 Audio (MP3)',
-                    callback_data: JSON.stringify({ type: 'audio', formatCode: bestAudioFormat, videoId })
+                    text: `🎥 ${quality} (with audio)`,
+                    callback_data: JSON.stringify({ 
+                        type: 'video', 
+                        itag: format.itag, 
+                        videoId,
+                        quality: quality
+                    })
+                }]);
+            });
+
+            // Add audio option
+            if (audioFormats.length > 0) {
+                keyboard.push([{
+                    text: '🎵 Audio Only (MP3)',
+                    callback_data: JSON.stringify({ 
+                        type: 'audio', 
+                        itag: audioFormats[0].itag, 
+                        videoId 
+                    })
                 }]);
             }
 
             if (keyboard.length > 0) {
-                bot.sendMessage(chatId, 'Please choose a format:', {
+                bot.sendMessage(chatId, `📹 *${info.videoDetails.title}*\n\nPlease choose a format:`, {
+                    parse_mode: 'Markdown',
                     reply_markup: {
                         inline_keyboard: keyboard
                     }
                 });
             } else {
-                bot.sendMessage(chatId, 'Sorry, no downloadable formats found for this link.');
+                bot.sendMessage(chatId, 'Sorry, no downloadable formats found for this video.');
             }
 
         } catch (err) {
-            console.error('Error getting formats:', err);
-            bot.sendMessage(chatId, 'Sorry, there was an error processing the video. Please make sure you sent a valid link.');
+            console.error('Error getting video info:', err);
+            bot.sendMessage(chatId, 'Sorry, there was an error processing this video. Please try a different link.');
         }
     } else if (msg.text !== '/start') {
-        bot.sendMessage(chatId, "I don't see a link. Are you trying to download a video? Send me the link!");
+        bot.sendMessage(chatId, "Please send me a valid YouTube link!");
     }
 });
 
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
-    const { type, formatCode, videoId } = JSON.parse(callbackQuery.data);
-    const link = `https://www.youtube.com/watch?v=${videoId}`;
+    const { type, itag, videoId, quality } = JSON.parse(callbackQuery.data);
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-    bot.sendMessage(chatId, `Downloading your ${type}... Please wait.`);
+    bot.sendMessage(chatId, `Downloading ${type === 'video' ? `${quality} video` : 'audio'}... Please wait.`);
 
     try {
         if (type === 'video') {
             const timestamp = Date.now();
-            const outputTemplate = path.join(downloadsDir, `${timestamp}.%(ext)s`);
+            const filePath = path.join(downloadsDir, `${timestamp}.mp4`);
 
-            const strategies = [
-                { cookies: 'cookies.txt' },
-                { cookiesFromBrowser: 'chrome' },
-                { cookiesFromBrowser: 'firefox' },
-                {} // No authentication
-            ];
-
-            let result;
-            for (let i = 0; i < strategies.length; i++) {
-                try {
-                    result = await youtubedl(link, {
-                        output: outputTemplate,
-                        format: `${formatCode}+bestaudio/best`,
-                        mergeOutputFormat: 'mp4',
-                        ...strategies[i]
-                    });
-                    break; // Success, exit loop
-                } catch (err) {
-                    console.log(`Download strategy ${i + 1} failed:`, err.message);
-                    if (i === strategies.length - 1) {
-                        throw err; // All strategies failed
-                    }
-                }
-            }
-
-            // Look for the downloaded file
-            const expectedFile = path.join(downloadsDir, `${timestamp}.mp4`);
+            const stream = ytdl(url, { format: itag });
+            const writeStream = fs.createWriteStream(filePath);
             
-            if (fs.existsSync(expectedFile)) {
-                await bot.sendVideo(chatId, expectedFile);
-                fs.unlink(expectedFile, (err) => {
-                    if (err) console.error('Error deleting file:', err);
-                });
-            } else {
-                // Fallback: find any file with our timestamp
-                const files = fs.readdirSync(downloadsDir).filter(f => f.includes(timestamp.toString()));
-                if (files.length > 0) {
-                    const actualFile = path.join(downloadsDir, files[0]);
-                    await bot.sendVideo(chatId, actualFile);
-                    fs.unlink(actualFile, (err) => {
+            stream.pipe(writeStream);
+
+            writeStream.on('finish', async () => {
+                try {
+                    await bot.sendVideo(chatId, filePath);
+                    fs.unlink(filePath, (err) => {
                         if (err) console.error('Error deleting file:', err);
                     });
-                } else {
-                    bot.sendMessage(chatId, 'Error: Downloaded file not found.');
+                } catch (sendError) {
+                    console.error('Error sending video:', sendError);
+                    bot.sendMessage(chatId, 'Downloaded successfully but failed to send. File might be too large.');
+                    fs.unlink(filePath, () => {});
                 }
-            }
+            });
+
+            writeStream.on('error', (err) => {
+                console.error('Write error:', err);
+                bot.sendMessage(chatId, 'Error downloading video.');
+            });
+
         } else if (type === 'audio') {
-            const filePath = path.join(downloadsDir, `${Date.now()}.mp3`);
+            const timestamp = Date.now();
+            const filePath = path.join(downloadsDir, `${timestamp}.mp3`);
 
-            const strategies = [
-                { cookies: 'cookies.txt' },
-                { cookiesFromBrowser: 'chrome' },
-                { cookiesFromBrowser: 'firefox' },
-                {} // No authentication
-            ];
+            const stream = ytdl(url, { filter: 'audioonly', format: 'mp3' });
+            const writeStream = fs.createWriteStream(filePath);
+            
+            stream.pipe(writeStream);
 
-            for (let i = 0; i < strategies.length; i++) {
+            writeStream.on('finish', async () => {
                 try {
-                    await youtubedl(link, {
-                        extractAudio: true,
-                        audioFormat: 'mp3',
-                        output: filePath,
-                        format: formatCode,
-                        ...strategies[i]
+                    await bot.sendAudio(chatId, filePath);
+                    fs.unlink(filePath, (err) => {
+                        if (err) console.error('Error deleting file:', err);
                     });
-                    break; // Success, exit loop
-                } catch (err) {
-                    console.log(`Audio download strategy ${i + 1} failed:`, err.message);
-                    if (i === strategies.length - 1) {
-                        throw err; // All strategies failed
-                    }
+                } catch (sendError) {
+                    console.error('Error sending audio:', sendError);
+                    bot.sendMessage(chatId, 'Downloaded successfully but failed to send. File might be too large.');
+                    fs.unlink(filePath, () => {});
                 }
-            }
+            });
 
-            await bot.sendAudio(chatId, filePath);
-
-            fs.unlink(filePath, (err) => {
-                if (err) console.error('Error deleting file:', err);
+            writeStream.on('error', (err) => {
+                console.error('Write error:', err);
+                bot.sendMessage(chatId, 'Error downloading audio.');
             });
         }
     } catch (err) {
@@ -213,3 +163,5 @@ bot.on('callback_query', async (callbackQuery) => {
         bot.sendMessage(chatId, `Sorry, there was an error downloading the ${type}.`);
     }
 });
+
+console.log('YouTube Telegram Bot is running...');
