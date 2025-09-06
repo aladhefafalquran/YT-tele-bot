@@ -35,10 +35,28 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, 'Processing your request... Please wait.');
 
         try {
-            const output = await youtubedl(messageText, {
-                listFormats: true,
-                cookies: 'cookies.txt'
-            });
+            let output;
+            const strategies = [
+                { cookies: 'cookies.txt' },
+                { cookiesFromBrowser: 'chrome' },
+                { cookiesFromBrowser: 'firefox' },
+                {} // No authentication
+            ];
+
+            for (let i = 0; i < strategies.length; i++) {
+                try {
+                    output = await youtubedl(messageText, {
+                        listFormats: true,
+                        ...strategies[i]
+                    });
+                    break; // Success, exit loop
+                } catch (err) {
+                    console.log(`Strategy ${i + 1} failed:`, err.message);
+                    if (i === strategies.length - 1) {
+                        throw err; // All strategies failed
+                    }
+                }
+            }
 
             const formats = output.split('\n');
             const videoFormats = [];
@@ -110,12 +128,30 @@ bot.on('callback_query', async (callbackQuery) => {
             const timestamp = Date.now();
             const outputTemplate = path.join(downloadsDir, `${timestamp}.%(ext)s`);
 
-            const result = await youtubedl(link, {
-                output: outputTemplate,
-                format: `${formatCode}+bestaudio/best`,
-                cookies: 'cookies.txt',
-                mergeOutputFormat: 'mp4'
-            });
+            const strategies = [
+                { cookies: 'cookies.txt' },
+                { cookiesFromBrowser: 'chrome' },
+                { cookiesFromBrowser: 'firefox' },
+                {} // No authentication
+            ];
+
+            let result;
+            for (let i = 0; i < strategies.length; i++) {
+                try {
+                    result = await youtubedl(link, {
+                        output: outputTemplate,
+                        format: `${formatCode}+bestaudio/best`,
+                        mergeOutputFormat: 'mp4',
+                        ...strategies[i]
+                    });
+                    break; // Success, exit loop
+                } catch (err) {
+                    console.log(`Download strategy ${i + 1} failed:`, err.message);
+                    if (i === strategies.length - 1) {
+                        throw err; // All strategies failed
+                    }
+                }
+            }
 
             // Look for the downloaded file
             const expectedFile = path.join(downloadsDir, `${timestamp}.mp4`);
@@ -141,13 +177,30 @@ bot.on('callback_query', async (callbackQuery) => {
         } else if (type === 'audio') {
             const filePath = path.join(downloadsDir, `${Date.now()}.mp3`);
 
-            await youtubedl(link, {
-                extractAudio: true,
-                audioFormat: 'mp3',
-                output: filePath,
-                format: formatCode,
-                cookies: 'cookies.txt'
-            });
+            const strategies = [
+                { cookies: 'cookies.txt' },
+                { cookiesFromBrowser: 'chrome' },
+                { cookiesFromBrowser: 'firefox' },
+                {} // No authentication
+            ];
+
+            for (let i = 0; i < strategies.length; i++) {
+                try {
+                    await youtubedl(link, {
+                        extractAudio: true,
+                        audioFormat: 'mp3',
+                        output: filePath,
+                        format: formatCode,
+                        ...strategies[i]
+                    });
+                    break; // Success, exit loop
+                } catch (err) {
+                    console.log(`Audio download strategy ${i + 1} failed:`, err.message);
+                    if (i === strategies.length - 1) {
+                        throw err; // All strategies failed
+                    }
+                }
+            }
 
             await bot.sendAudio(chatId, filePath);
 
