@@ -1,40 +1,8 @@
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
-const ytdl = require('@distube/ytdl-core');
+const ytdl = require('ytdl-core');
 const fs = require('fs');
 const path = require('path');
-
-// User agents to rotate through
-const userAgents = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
-];
-
-// Create agent with random user agent
-function getRandomAgent() {
-    return {
-        headers: {
-            'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)]
-        }
-    };
-}
-
-// Retry function with exponential backoff
-async function retryWithBackoff(fn, maxRetries = 3) {
-    for (let i = 0; i < maxRetries; i++) {
-        try {
-            await new Promise(resolve => setTimeout(resolve, i * 1000 + Math.random() * 1000)); // Random delay
-            return await fn();
-        } catch (error) {
-            console.log(`Attempt ${i + 1} failed:`, error.message);
-            if (i === maxRetries - 1) {
-                throw error;
-            }
-        }
-    }
-}
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
@@ -65,49 +33,47 @@ bot.on('message', async (msg) => {
         bot.sendMessage(chatId, 'Processing your request... Please wait.');
 
         try {
-            const info = await retryWithBackoff(async () => {
-                const agent = getRandomAgent();
-                return await ytdl.getInfo(messageText, { 
-                    requestOptions: agent
-                });
+            // Simple approach - get available formats
+            if (!ytdl.validateURL(messageText)) {
+                bot.sendMessage(chatId, 'Invalid YouTube URL. Please check the link.');
+                return;
+            }
+
+            const info = await ytdl.getBasicInfo(messageText);
+            const formats = ytdl.filterFormats(info.formats, 'videoandaudio');
+
+            // Get unique quality options
+            const qualityOptions = {};
+            formats.forEach(format => {
+                if (format.container === 'mp4' && format.qualityLabel) {
+                    qualityOptions[format.qualityLabel] = format;
+                }
             });
-            const formats = info.formats;
 
-            // Filter video formats with audio
-            const videoFormats = formats
-                .filter(format => format.hasVideo && format.hasAudio && format.container === 'mp4')
-                .sort((a, b) => (b.height || 0) - (a.height || 0))
-                .slice(0, 8); // Limit to top 8 formats
-
-            // Filter audio-only formats
-            const audioFormats = formats
-                .filter(format => format.hasAudio && !format.hasVideo)
-                .sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0))
-                .slice(0, 1); // Best audio only
+            // Get audio format
+            const audioFormats = ytdl.filterFormats(info.formats, 'audioonly');
+            const bestAudio = audioFormats[0];
 
             const keyboard = [];
 
             // Add video options
-            videoFormats.forEach(format => {
-                const quality = format.qualityLabel || format.quality || 'Unknown';
+            Object.keys(qualityOptions).forEach(quality => {
                 keyboard.push([{
                     text: `🎥 ${quality} (with audio)`,
                     callback_data: JSON.stringify({ 
                         type: 'video', 
-                        itag: format.itag, 
-                        videoId,
-                        quality: quality
+                        quality: quality,
+                        videoId 
                     })
                 }]);
             });
 
             // Add audio option
-            if (audioFormats.length > 0) {
+            if (bestAudio) {
                 keyboard.push([{
                     text: '🎵 Audio Only (MP3)',
                     callback_data: JSON.stringify({ 
                         type: 'audio', 
-                        itag: audioFormats[0].itag, 
                         videoId 
                     })
                 }]);
@@ -125,8 +91,8 @@ bot.on('message', async (msg) => {
             }
 
         } catch (err) {
-            console.error('Error getting video info:', err);
-            bot.sendMessage(chatId, 'Sorry, there was an error processing this video. Please try a different link.');
+            console.error('Error getting video info:', err.message);
+            bot.sendMessage(chatId, 'Sorry, this video is not available for download. Try a different video.');
         }
     } else if (msg.text !== '/start') {
         bot.sendMessage(chatId, "Please send me a valid YouTube link!");
@@ -135,23 +101,24 @@ bot.on('message', async (msg) => {
 
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
-    const { type, itag, videoId, quality } = JSON.parse(callbackQuery.data);
+    const { type, quality, videoId } = JSON.parse(callbackQuery.data);
     const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-    bot.sendMessage(chatId, `Downloading ${type === 'video' ? `${quality} video` : 'audio'}... Please wait.`);
+    bot.sendMessage(chatId, `Downloading ${type === 'video' ? quality + ' video' : 'audio'}... Please wait.`);
 
     try {
-        if (type === 'video') {
-            const timestamp = Date.now();
-            const filePath = path.join(downloadsDir, `${timestamp}.mp4`);
+        const timestamp = Date.now();
 
-            const agent = getRandomAgent();
-            const stream = ytdl(url, { 
-                format: itag,
-                requestOptions: agent
-            });
-            const writeStream = fs.createWriteStream(filePath);
+        if (type === 'video') {
+            const filePath = path.join(downloadsDir, `${timestamp}.mp4`);
             
+            // Download highest quality available
+            const stream = ytdl(url, { 
+                quality: 'highest',
+                filter: 'videoandaudio'
+            });
+            
+            const writeStream = fs.createWriteStream(filePath);
             stream.pipe(writeStream);
 
             writeStream.on('finish', async () => {
@@ -162,7 +129,7 @@ bot.on('callback_query', async (callbackQuery) => {
                     });
                 } catch (sendError) {
                     console.error('Error sending video:', sendError);
-                    bot.sendMessage(chatId, 'Downloaded successfully but failed to send. File might be too large.');
+                    bot.sendMessage(chatId, 'Downloaded but failed to send. File might be too large.');
                     fs.unlink(filePath, () => {});
                 }
             });
@@ -173,16 +140,14 @@ bot.on('callback_query', async (callbackQuery) => {
             });
 
         } else if (type === 'audio') {
-            const timestamp = Date.now();
             const filePath = path.join(downloadsDir, `${timestamp}.mp3`);
-
-            const agent = getRandomAgent();
+            
             const stream = ytdl(url, { 
                 filter: 'audioonly',
-                requestOptions: agent
+                quality: 'highestaudio'
             });
-            const writeStream = fs.createWriteStream(filePath);
             
+            const writeStream = fs.createWriteStream(filePath);
             stream.pipe(writeStream);
 
             writeStream.on('finish', async () => {
@@ -193,7 +158,7 @@ bot.on('callback_query', async (callbackQuery) => {
                     });
                 } catch (sendError) {
                     console.error('Error sending audio:', sendError);
-                    bot.sendMessage(chatId, 'Downloaded successfully but failed to send. File might be too large.');
+                    bot.sendMessage(chatId, 'Downloaded but failed to send. File might be too large.');
                     fs.unlink(filePath, () => {});
                 }
             });
