@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Video Downloader</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Telegram Video Downloader</h1>
+        <div class="input-container">
+            <input type="text" id="videoUrl" placeholder="Enter video URL">
+            <button id="downloadBtn">Get Formats</button>
+        </div>
+        <div id="formatsContainer"></div>
+        <div id="statusMessage" style="display: none;"></div>
+        
+        <div id="downloadProgressContainer" style="display: none;">
+            <p id="downloadStatus">Downloading...</p>
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+            <span id="progressPercentage">0%</span>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
